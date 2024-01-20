@@ -1,0 +1,9 @@
+[profile.default]
+solc_version = '0.8.20'
+auto_detect_solc = false
+viaIR = true
+optimizer = true
+optimizer_runs = 200
+remappings = [
+  "forge-std/=lib/forge-std/src/",
+]

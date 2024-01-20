@@ -1,0 +1,43 @@
+[package]
+name = "sandooo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dotenv = "0.15.0"
+anyhow = "1.0.70"
+
+ethers-core = "2.0"
+ethers-providers = "2.0"
+ethers-contract = "2.0"
+ethers = { version = "2.0", features = ["abigen", "ws", "ipc"] }
+
+ethers-flashbots = { git = "https://github.com/onbjerg/ethers-flashbots" }
+
+eth-encode-packed = "0.1.0"
+rlp = { version = "0.5", features = ["derive"] }
+
+foundry-evm-mini = { git = "https://github.com/solidquant/foundry-evm-mini.git" }
+
+revm = { version = "3", default-features = false, features = [
+  "std",
+  "serde",
+  "memory_limit",
+  "optional_eip3607",
+  "optional_block_gas_limit",
+  "optional_no_base_fee",
+] }
+
+csv = "1.2.2"
+colored = "2.0.0"
+log = "0.4.17"
+fern = { version = "0.6.2", features = ["colored"] }
+chrono = "0.4.23"
+indicatif = "0.17.5"
+
+[patch.crates-io]
+revm = { git = "https://github.com/bluealloy/revm/", rev = "80c909d6f242886cb26e6103a01d1a4bf9468426" }
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
