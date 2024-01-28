@@ -79,12 +79,11 @@ pub struct OptimizedSandwich {
 
 pub static V2_SWAP_EVENT_ID: &str = "0xd78ad95f";
 
-pub async fn extract_swap_info(
+pub async fn debug_trace_call(
     provider: &Arc<Provider<Ws>>,
     new_block: &NewBlock,
     pending_tx: &NewPendingTx,
-    pools_map: &HashMap<H160, Pool>,
-) -> Result<Vec<SwapInfo>> {
+) -> Result<Option<CallFrame>> {
     let mut opts = GethDebugTracingCallOptions::default();
     let mut call_config = CallConfig::default();
     call_config.with_log = Some(true);
@@ -104,115 +103,124 @@ pub async fn extract_swap_info(
         .unwrap_or_default();
     tx.nonce = nonce;
 
-    let tx_hash = tx.hash;
+    let trace = provider
+        .debug_trace_call(&tx, Some(block_number.into()), opts)
+        .await?;
+
+    match trace {
+        GethTrace::Known(call_tracer) => match call_tracer {
+            GethTraceFrame::CallTracer(frame) => Ok(Some(frame)),
+            _ => Ok(None),
+        },
+        _ => Ok(None),
+    }
+}
+
+pub async fn extract_swap_info(
+    provider: &Arc<Provider<Ws>>,
+    new_block: &NewBlock,
+    pending_tx: &NewPendingTx,
+    pools_map: &HashMap<H160, Pool>,
+) -> Result<Vec<SwapInfo>> {
+    let tx_hash = pending_tx.tx.hash;
     let mut swap_info_vec = Vec::new();
 
-    match provider
-        .debug_trace_call(&tx, Some(block_number.into()), opts)
-        .await
-    {
-        Ok(trace) => match trace {
-            GethTrace::Known(call_tracer) => match call_tracer {
-                GethTraceFrame::CallTracer(frame) => {
-                    let mut logs = Vec::new();
-                    extract_logs(&frame, &mut logs);
+    let frame = debug_trace_call(provider, new_block, pending_tx).await?;
+    if frame.is_none() {
+        return Ok(swap_info_vec);
+    }
+    let frame = frame.unwrap();
 
-                    for log in &logs {
-                        match &log.topics {
-                            Some(topics) => {
-                                if topics.len() > 1 {
-                                    let selector = &format!("{:?}", topics[0])[0..10];
-                                    let is_v2_swap = selector == V2_SWAP_EVENT_ID;
-                                    if is_v2_swap {
-                                        let pair_address = log.address.unwrap();
+    let mut logs = Vec::new();
+    extract_logs(&frame, &mut logs);
 
-                                        // filter out the pools we have in memory only
-                                        let pool = pools_map.get(&pair_address);
-                                        if pool.is_none() {
-                                            continue;
-                                        }
-                                        let pool = pool.unwrap();
+    for log in &logs {
+        match &log.topics {
+            Some(topics) => {
+                if topics.len() > 1 {
+                    let selector = &format!("{:?}", topics[0])[0..10];
+                    let is_v2_swap = selector == V2_SWAP_EVENT_ID;
+                    if is_v2_swap {
+                        let pair_address = log.address.unwrap();
 
-                                        let token0 = pool.token0;
-                                        let token1 = pool.token1;
-
-                                        let token0_is_weth = is_weth(token0);
-                                        let token1_is_weth = is_weth(token1);
-
-                                        // filter WETH pairs only
-                                        if !token0_is_weth && !token1_is_weth {
-                                            continue;
-                                        }
-
-                                        let (main_currency, target_token, token0_is_main) =
-                                            if token0_is_weth {
-                                                (token0, token1, true)
-                                            } else {
-                                                (token1, token0, false)
-                                            };
-
-                                        let (in0, _, _, out1) = match ethers::abi::decode(
-                                            &[
-                                                ParamType::Uint(256),
-                                                ParamType::Uint(256),
-                                                ParamType::Uint(256),
-                                                ParamType::Uint(256),
-                                            ],
-                                            log.data.as_ref().unwrap(),
-                                        ) {
-                                            Ok(input) => {
-                                                let uints: Vec<U256> = input
-                                                    .into_iter()
-                                                    .map(|i| i.to_owned().into_uint().unwrap())
-                                                    .collect();
-                                                (uints[0], uints[1], uints[2], uints[3])
-                                            }
-                                            _ => {
-                                                let zero = U256::zero();
-                                                (zero, zero, zero, zero)
-                                            }
-                                        };
-
-                                        let zero_for_one =
-                                            (in0 > U256::zero()) && (out1 > U256::zero());
-
-                                        let direction = if token0_is_main {
-                                            if zero_for_one {
-                                                SwapDirection::Buy
-                                            } else {
-                                                SwapDirection::Sell
-                                            }
-                                        } else {
-                                            if zero_for_one {
-                                                SwapDirection::Sell
-                                            } else {
-                                                SwapDirection::Buy
-                                            }
-                                        };
-
-                                        let swap_info = SwapInfo {
-                                            tx_hash,
-                                            target_pair: pair_address,
-                                            main_currency,
-                                            target_token,
-                                            version: 2,
-                                            token0_is_main,
-                                            direction,
-                                        };
-                                        swap_info_vec.push(swap_info);
-                                    }
-                                }
-                            }
-                            _ => {}
+                        // filter out the pools we have in memory only
+                        let pool = pools_map.get(&pair_address);
+                        if pool.is_none() {
+                            continue;
                         }
+                        let pool = pool.unwrap();
+
+                        let token0 = pool.token0;
+                        let token1 = pool.token1;
+
+                        let token0_is_weth = is_weth(token0);
+                        let token1_is_weth = is_weth(token1);
+
+                        // filter WETH pairs only
+                        if !token0_is_weth && !token1_is_weth {
+                            continue;
+                        }
+
+                        let (main_currency, target_token, token0_is_main) = if token0_is_weth {
+                            (token0, token1, true)
+                        } else {
+                            (token1, token0, false)
+                        };
+
+                        let (in0, _, _, out1) = match ethers::abi::decode(
+                            &[
+                                ParamType::Uint(256),
+                                ParamType::Uint(256),
+                                ParamType::Uint(256),
+                                ParamType::Uint(256),
+                            ],
+                            log.data.as_ref().unwrap(),
+                        ) {
+                            Ok(input) => {
+                                let uints: Vec<U256> = input
+                                    .into_iter()
+                                    .map(|i| i.to_owned().into_uint().unwrap())
+                                    .collect();
+                                (uints[0], uints[1], uints[2], uints[3])
+                            }
+                            _ => {
+                                let zero = U256::zero();
+                                (zero, zero, zero, zero)
+                            }
+                        };
+
+                        let zero_for_one = (in0 > U256::zero()) && (out1 > U256::zero());
+
+                        let direction = if token0_is_main {
+                            if zero_for_one {
+                                SwapDirection::Buy
+                            } else {
+                                SwapDirection::Sell
+                            }
+                        } else {
+                            if zero_for_one {
+                                SwapDirection::Sell
+                            } else {
+                                SwapDirection::Buy
+                            }
+                        };
+
+                        let swap_info = SwapInfo {
+                            tx_hash,
+                            target_pair: pair_address,
+                            main_currency,
+                            target_token,
+                            version: 2,
+                            token0_is_main,
+                            direction,
+                        };
+                        swap_info_vec.push(swap_info);
                     }
                 }
-                _ => {}
-            },
+            }
             _ => {}
-        },
-        _ => {}
-    };
+        }
+    }
 
     Ok(swap_info_vec)
 }
