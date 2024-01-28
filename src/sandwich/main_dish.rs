@@ -59,7 +59,6 @@ pub async fn main_dish(
                 continue;
             }
 
-            info!("----- Bundle ID: {} -----", bundle_id);
             match alert.send(&bundle_id).await {
                 Err(e) => warn!("Telegram error: {e:?}"),
                 _ => {}
@@ -74,7 +73,7 @@ pub async fn main_dish(
             let base_fee = new_block.next_base_fee;
             let max_fee = base_fee;
 
-            let (bribe_amount, front_access_list, back_access_list) = match bot_batch_sandwich
+            match bot_batch_sandwich
                 .simulate(
                     provider.clone(),
                     owner,
@@ -91,80 +90,50 @@ pub async fn main_dish(
                     if simulated_sandwich.revenue > 0 {
                         let bribe_amount = (U256::from(simulated_sandwich.revenue) * bribe_pct)
                             / U256::from(10000);
-                        (
+
+                        // set limit as 30% above what we simulated
+                        let front_gas_limit = (simulated_sandwich.front_gas_used * 13) / 10;
+                        let back_gas_limit = (simulated_sandwich.back_gas_used * 13) / 10;
+
+                        let realistic_back_gas_limit =
+                            (simulated_sandwich.back_gas_used * 105) / 100;
+                        let max_priority_fee_per_gas =
+                            bribe_amount / U256::from(realistic_back_gas_limit);
+                        let max_fee_per_gas = base_fee + max_priority_fee_per_gas;
+
+                        info!("Sandwiches: {:?}", bot_batch_sandwich.sandwiches.len());
+                        info!(
+                            "> Base fee: {:?} / Priority fee: {:?} / Max fee: {:?} / Bribe: {:?}",
+                            base_fee, max_priority_fee_per_gas, max_fee_per_gas, bribe_amount
+                        );
+                        info!(
+                            "> Revenue: {:?} / Profit: {:?} / Gas cost: {:?}",
+                            simulated_sandwich.revenue,
+                            simulated_sandwich.profit,
+                            simulated_sandwich.gas_cost
+                        );
+                        info!(
+                            "> Front gas: {:?} / Back gas: {:?}",
+                            simulated_sandwich.front_gas_used, simulated_sandwich.back_gas_used
+                        );
+
+                        let message = format!(
+                            "[{:?}] Front: {:?} / Back: {:?} / Bribe: {:?}",
+                            promising_tx_hash,
+                            simulated_sandwich.front_gas_used,
+                            simulated_sandwich.back_gas_used,
                             bribe_amount,
-                            Some(simulated_sandwich.front_access_list),
-                            Some(simulated_sandwich.back_access_list),
-                        )
-                    } else {
-                        (U256::zero(), None, None)
+                        );
+                        match alert.send(&message).await {
+                            Err(e) => warn!("Telegram error: {e:?}"),
+                            _ => {}
+                        }
                     }
                 }
                 Err(e) => {
                     warn!("bribe_amount simulated failed: {e:?}");
-                    (U256::zero(), None, None)
                 }
             };
-
-            if bribe_amount.is_zero() {
-                continue;
-            }
-
-            // final simulation
-            let simulated_sandwich = bot_batch_sandwich
-                .simulate(
-                    provider.clone(),
-                    owner,
-                    new_block.block_number,
-                    base_fee,
-                    max_fee,
-                    front_access_list,
-                    back_access_list,
-                    bot_address,
-                )
-                .await;
-            if simulated_sandwich.is_err() {
-                let e = simulated_sandwich.as_ref().err().unwrap();
-                warn!("BatchSandwich.simulate error: {e:?}");
-                continue;
-            }
-            let simulated_sandwich = simulated_sandwich.unwrap();
-            if simulated_sandwich.revenue <= 0 {
-                continue;
-            }
-            // set limit as 30% above what we simulated
-            let front_gas_limit = (simulated_sandwich.front_gas_used * 13) / 10;
-            let back_gas_limit = (simulated_sandwich.back_gas_used * 13) / 10;
-
-            let realistic_back_gas_limit = (simulated_sandwich.back_gas_used * 105) / 100;
-            let max_priority_fee_per_gas = bribe_amount / U256::from(realistic_back_gas_limit);
-            let max_fee_per_gas = base_fee + max_priority_fee_per_gas;
-
-            info!("Sandwiches: {:?}", bot_batch_sandwich.sandwiches.len());
-            info!(
-                "> Base fee: {:?} / Priority fee: {:?} / Max fee: {:?} / Bribe: {:?}",
-                base_fee, max_priority_fee_per_gas, max_fee_per_gas, bribe_amount
-            );
-            info!(
-                "> Revenue: {:?} / Profit: {:?} / Gas cost: {:?}",
-                simulated_sandwich.revenue, simulated_sandwich.profit, simulated_sandwich.gas_cost
-            );
-            info!(
-                "> Front gas: {:?} / Back gas: {:?}",
-                simulated_sandwich.front_gas_used, simulated_sandwich.back_gas_used
-            );
-
-            let message = format!(
-                "[{:?}] Front: {:?} / Back: {:?} / Bribe: {:?}",
-                promising_tx_hash,
-                simulated_sandwich.front_gas_used,
-                simulated_sandwich.back_gas_used,
-                bribe_amount,
-            );
-            match alert.send(&message).await {
-                Err(e) => warn!("Telegram error: {e:?}"),
-                _ => {}
-            }
         }
     }
 

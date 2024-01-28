@@ -105,11 +105,14 @@ pub async fn debug_trace_call(
 
     let trace = provider
         .debug_trace_call(&tx, Some(block_number.into()), opts)
-        .await?;
+        .await;
 
     match trace {
-        GethTrace::Known(call_tracer) => match call_tracer {
-            GethTraceFrame::CallTracer(frame) => Ok(Some(frame)),
+        Ok(trace) => match trace {
+            GethTrace::Known(call_tracer) => match call_tracer {
+                GethTraceFrame::CallTracer(frame) => Ok(Some(frame)),
+                _ => Ok(None),
+            },
             _ => Ok(None),
         },
         _ => Ok(None),
@@ -225,7 +228,7 @@ pub async fn extract_swap_info(
     Ok(swap_info_vec)
 }
 
-fn extract_logs(call_frame: &CallFrame, logs: &mut Vec<CallLogFrame>) {
+pub fn extract_logs(call_frame: &CallFrame, logs: &mut Vec<CallLogFrame>) {
     if let Some(ref logs_vec) = call_frame.logs {
         logs.extend(logs_vec.iter().cloned());
     }

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 contract Sandooo {
-    address internal immutable owner;
+    address public owner;
 
     bytes4 internal constant TOKEN_TRANSFER_ID = 0xa9059cbb;
     bytes4 internal constant V2_SWAP_ID = 0x022c0d9f;
