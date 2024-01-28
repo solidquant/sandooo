@@ -7,7 +7,11 @@ https://medium.com/@solidquant
 
 Roadmap + expected release dates:
 1. Opportunity detection (~1/28)
+https://medium.com/@solidquant/100-hours-of-building-a-sandwich-bot-a89235281da3
 2. Execution (~2/4)
 3. Update #1: Stablecoin sandwich (~2/11)
 4. Update #2: Multiple sandwich bundling (~2/18)
 5. Update #3: V3 implementation (~2/25)
+
+Follow me on Twitter:
+https://twitter.com/solidquant
