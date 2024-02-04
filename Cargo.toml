@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+url = "2.3.1"
 dotenv = "0.15.0"
 anyhow = "1.0.70"
 itertools = "0.11.0"

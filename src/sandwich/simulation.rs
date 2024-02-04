@@ -261,6 +261,13 @@ impl BatchSandwich {
         tx_hashes.join("-")
     }
 
+    pub fn victim_tx_hashes(&self) -> Vec<H256> {
+        self.sandwiches
+            .iter()
+            .map(|s| s.victim_tx.tx_hash)
+            .collect()
+    }
+
     pub fn target_tokens(&self) -> Vec<H160> {
         self.sandwiches
             .iter()

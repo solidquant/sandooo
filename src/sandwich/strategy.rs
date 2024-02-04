@@ -10,6 +10,7 @@ use tokio::sync::broadcast::Sender;
 
 use crate::common::alert::Alert;
 use crate::common::constants::{Env, WETH};
+use crate::common::execution::Executor;
 use crate::common::pools::{load_all_pools, Pool};
 use crate::common::streams::{Event, NewBlock};
 use crate::common::tokens::load_all_tokens;
@@ -64,6 +65,8 @@ pub async fn run_sandwich_strategy(provider: Arc<Provider<Ws>>, event_sender: Se
     };
 
     let alert = Alert::new();
+    let executor = Executor::new(provider.clone());
+
     let weth = to_h160(WETH);
     let bot_address = H160::from_str(&env.bot_address).unwrap();
     let wallet = env
@@ -204,6 +207,7 @@ pub async fn run_sandwich_strategy(provider: Arc<Provider<Ws>>, event_sender: Se
                             match main_dish(
                                 &provider,
                                 &alert,
+                                &executor,
                                 &new_block,
                                 owner,
                                 bot_address,
