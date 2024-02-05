@@ -503,12 +503,7 @@ impl BatchSandwich {
         };
         simulator.set_access_list(front_access_list.clone());
         let front_gas_used = match simulator.call(front_tx) {
-            Ok(result) => {
-                let used = result.gas_used;
-                let refunded = result.gas_refunded;
-                let net_used = used + refunded;
-                net_used
-            }
+            Ok(result) => result.gas_used,
             Err(_) => 0,
         };
 
@@ -563,12 +558,7 @@ impl BatchSandwich {
         let back_access_list = back_access_list.clone();
         simulator.set_access_list(back_access_list.clone());
         let back_gas_used = match simulator.call(back_tx) {
-            Ok(result) => {
-                let used = result.gas_used;
-                let refunded = result.gas_refunded;
-                let net_used = used + refunded;
-                net_used
-            }
+            Ok(result) => result.gas_used,
             Err(_) => 0,
         };
 
