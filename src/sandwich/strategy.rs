@@ -9,12 +9,12 @@ use std::{collections::HashMap, str::FromStr, sync::Arc};
 use tokio::sync::broadcast::Sender;
 
 use crate::common::alert::Alert;
-use crate::common::constants::{Env, WETH};
+use crate::common::constants::Env;
 use crate::common::execution::Executor;
 use crate::common::pools::{load_all_pools, Pool};
 use crate::common::streams::{Event, NewBlock};
 use crate::common::tokens::load_all_tokens;
-use crate::common::utils::{calculate_next_block_base_fee, to_h160};
+use crate::common::utils::calculate_next_block_base_fee;
 use crate::sandwich::appetizer::appetizer;
 use crate::sandwich::main_dish::main_dish;
 use crate::sandwich::simulation::{extract_swap_info, PendingTxInfo, Sandwich};
@@ -67,7 +67,6 @@ pub async fn run_sandwich_strategy(provider: Arc<Provider<Ws>>, event_sender: Se
     let alert = Alert::new();
     let executor = Executor::new(provider.clone());
 
-    let weth = to_h160(WETH);
     let bot_address = H160::from_str(&env.bot_address).unwrap();
     let wallet = env
         .private_key
@@ -211,7 +210,6 @@ pub async fn run_sandwich_strategy(provider: Arc<Provider<Ws>>, event_sender: Se
                                 &new_block,
                                 owner,
                                 bot_address,
-                                weth,
                                 U256::from(9900), // 99%
                                 &promising_sandwiches,
                                 &mut simulated_bundle_ids,
