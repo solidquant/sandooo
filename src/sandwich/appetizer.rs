@@ -6,9 +6,9 @@ use ethers::{
 use log::warn;
 use std::{collections::HashMap, sync::Arc};
 
-use crate::common::constants::WETH_DECIMALS;
 use crate::common::evm::VictimTx;
 use crate::common::streams::NewBlock;
+use crate::common::utils::{is_weth, MainCurrency};
 use crate::sandwich::simulation::{BatchSandwich, PendingTxInfo, Sandwich, SwapDirection};
 
 pub async fn appetizer(
@@ -46,9 +46,15 @@ pub async fn appetizer(
             _ => {}
         }
 
-        let decimals = WETH_DECIMALS;
+        let main_currency = info.main_currency;
+        let mc = MainCurrency::new(main_currency);
+        let decimals = mc.decimals();
 
-        let small_amount_in = U256::from(10).pow(U256::from(decimals - 2)); // 0.01 WETH
+        let small_amount_in = if is_weth(main_currency) {
+            U256::from(10).pow(U256::from(decimals - 2)) // 0.01 WETH
+        } else {
+            U256::from(10) * U256::from(10).pow(U256::from(decimals)) // 10 USDT, 10 USDC
+        };
         let base_fee = new_block.next_base_fee;
         let max_fee = base_fee;
 
@@ -85,8 +91,11 @@ pub async fn appetizer(
         if simulated_sandwich.profit <= 0 {
             continue;
         }
-        let ceiling_amount_in = U256::from(100) * U256::from(10).pow(U256::from(18)); // 100 ETH
-                                                                                      // almost no sandwiches can take more than 100 ETH
+        let ceiling_amount_in = if is_weth(main_currency) {
+            U256::from(100) * U256::from(10).pow(U256::from(18)) // 100 ETH
+        } else {
+            U256::from(300000) * U256::from(10).pow(U256::from(decimals)) // 300000 USDT/USDC (both 6 decimals)
+        };
         let optimized_sandwich = sandwich
             .optimize(
                 provider.clone(),

@@ -10,11 +10,13 @@ use revm::primitives::{Bytecode, U256 as rU256};
 use std::{collections::HashMap, default::Default, str::FromStr, sync::Arc};
 
 use crate::common::bytecode::SANDOOO_BYTECODE;
-use crate::common::constants::{WETH, WETH_BALANCE_SLOT};
+use crate::common::constants::{USDC, USDT};
 use crate::common::evm::{EvmSimulator, Tx, VictimTx};
 use crate::common::pools::Pool;
 use crate::common::streams::{NewBlock, NewPendingTx};
-use crate::common::utils::{create_new_wallet, is_weth, to_h160};
+use crate::common::utils::{
+    create_new_wallet, is_weth, return_main_and_target_currency, MainCurrency,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct PendingTxInfo {
@@ -156,19 +158,11 @@ pub async fn extract_swap_info(
                         let token0 = pool.token0;
                         let token1 = pool.token1;
 
-                        let token0_is_weth = is_weth(token0);
-                        let token1_is_weth = is_weth(token1);
-
-                        // filter WETH pairs only
-                        if !token0_is_weth && !token1_is_weth {
-                            continue;
-                        }
-
-                        let (main_currency, target_token, token0_is_main) = if token0_is_weth {
-                            (token0, token1, true)
-                        } else {
-                            (token1, token0, false)
-                        };
+                        let (main_currency, target_token, token0_is_main) =
+                            match return_main_and_target_currency(token0, token1) {
+                                Some(out) => (out.0, out.1, out.0 == token0),
+                                None => continue,
+                            };
 
                         let (in0, _, _, out1) = match ethers::abi::decode(
                             &[
@@ -248,6 +242,30 @@ pub fn get_v2_amount_out(amount_in: U256, reserve_in: U256, reserve_out: U256) -
     amount_out.unwrap_or_default()
 }
 
+pub fn convert_usdt_to_weth(
+    simulator: &mut EvmSimulator<Provider<Ws>>,
+    amount: U256,
+) -> Result<U256> {
+    let conversion_pair = H160::from_str("0x0d4a11d5EEaaC28EC3F61d100daF4d40471f1852").unwrap();
+    // token0: WETH / token1: USDT
+    let reserves = simulator.get_pair_reserves(conversion_pair)?;
+    let (reserve_in, reserve_out) = (reserves.1, reserves.0);
+    let weth_out = get_v2_amount_out(amount, reserve_in, reserve_out);
+    Ok(weth_out)
+}
+
+pub fn convert_usdc_to_weth(
+    simulator: &mut EvmSimulator<Provider<Ws>>,
+    amount: U256,
+) -> Result<U256> {
+    let conversion_pair = H160::from_str("0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc").unwrap();
+    // token0: USDC / token1: WETH
+    let reserves = simulator.get_pair_reserves(conversion_pair)?;
+    let (reserve_in, reserve_out) = (reserves.0, reserves.1);
+    let weth_out = get_v2_amount_out(amount, reserve_in, reserve_out);
+    Ok(weth_out)
+}
+
 impl BatchSandwich {
     pub fn bundle_id(&self) -> String {
         let mut tx_hashes = Vec::new();
@@ -287,8 +305,8 @@ impl BatchSandwich {
         &self,
         block_number: U256,
         pair_reserves: &HashMap<H160, (U256, U256)>,
-    ) -> Result<(Bytes, Vec<Tx>, U256)> {
-        let mut starting_eth_value = U256::zero();
+    ) -> Result<(Bytes, Vec<Tx>, HashMap<H160, U256>)> {
+        let mut starting_mc_values = HashMap::new();
 
         let mut added_tx_hash = HashMap::new();
         let mut victim_txs = Vec::new();
@@ -334,7 +352,13 @@ impl BatchSandwich {
             let token_in =
                 eH160::from_str(&format!("{:?}", sandwich.swap_info.main_currency)).unwrap();
 
-            starting_eth_value += new_amount_in;
+            let main_currency = sandwich.swap_info.main_currency;
+            if starting_mc_values.contains_key(&main_currency) {
+                let prev_mc_value = *starting_mc_values.get(&main_currency).unwrap();
+                starting_mc_values.insert(main_currency, prev_mc_value + new_amount_in);
+            } else {
+                starting_mc_values.insert(main_currency, new_amount_in);
+            }
 
             frontrun_swap_params.extend(vec![
                 SolidityDataType::NumberWithShift(
@@ -351,7 +375,7 @@ impl BatchSandwich {
         let frontrun_calldata = eth_encode_packed::abi::encode_packed(&frontrun_swap_params);
         let frontrun_calldata_bytes = Bytes::from_str(&frontrun_calldata.1).unwrap_or_default();
 
-        Ok((frontrun_calldata_bytes, victim_txs, starting_eth_value))
+        Ok((frontrun_calldata_bytes, victim_txs, starting_mc_values))
     }
 
     pub fn encode_backrun_tx(
@@ -427,7 +451,6 @@ impl BatchSandwich {
         back_access_list: Option<AccessList>,
         bot_address: Option<H160>,
     ) -> Result<SimulatedSandwich> {
-        let weth = to_h160(WETH);
         let mut simulator = EvmSimulator::new(provider.clone(), owner, block_number);
 
         // set ETH balance so that it's enough to cover gas fees
@@ -453,7 +476,7 @@ impl BatchSandwich {
         let next_block_number = simulator.get_block_number();
 
         // create frontrun tx calldata and inject main_currency token balance to bot contract
-        let (frontrun_calldata, victim_txs, starting_eth_value) =
+        let (frontrun_calldata, victim_txs, starting_mc_values) =
             self.encode_frontrun_tx(next_block_number, &reserves_before)?;
 
         // deploy Sandooo bot
@@ -467,12 +490,16 @@ impl BatchSandwich {
                 let owner_ru256 = rU256::from_str(&format!("{:?}", simulator.owner)).unwrap();
                 simulator.insert_account_storage(bot_address, rU256::from(0), owner_ru256)?;
 
-                simulator.set_token_balance(
-                    weth,
-                    bot_address,
-                    WETH_BALANCE_SLOT,
-                    starting_eth_value.into(),
-                )?;
+                for (main_currency, starting_value) in &starting_mc_values {
+                    let mc = MainCurrency::new(*main_currency);
+                    let balance_slot = mc.balance_slot();
+                    simulator.set_token_balance(
+                        *main_currency,
+                        bot_address,
+                        balance_slot,
+                        (*starting_value).into(),
+                    )?;
+                }
 
                 bot_address
             }
@@ -480,7 +507,11 @@ impl BatchSandwich {
 
         // check ETH, MC balance before any txs are run
         let eth_balance_before = simulator.get_eth_balance_of(simulator.owner);
-        let weth_balance_before = simulator.get_token_balance(weth, bot_address)?;
+        let mut mc_balances_before = HashMap::new();
+        for (main_currency, _) in &starting_mc_values {
+            let balance_before = simulator.get_token_balance(*main_currency, bot_address)?;
+            mc_balances_before.insert(main_currency, balance_before);
+        }
 
         // set base fee so that gas fees are taken into account
         simulator.set_base_fee(base_fee);
@@ -565,17 +596,51 @@ impl BatchSandwich {
         simulator.set_base_fee(U256::zero());
 
         let eth_balance_after = simulator.get_eth_balance_of(simulator.owner);
-        let weth_balance_after = simulator.get_token_balance(weth, bot_address)?;
+        let mut mc_balances_after = HashMap::new();
+        for (main_currency, _) in &starting_mc_values {
+            let balance_after = simulator.get_token_balance(*main_currency, bot_address)?;
+            mc_balances_after.insert(main_currency, balance_after);
+        }
 
         let eth_used_as_gas = eth_balance_before
             .checked_sub(eth_balance_after)
             .unwrap_or(eth_balance_before);
         let eth_used_as_gas_i256 = I256::from_dec_str(&eth_used_as_gas.to_string())?;
 
-        let weth_balance_before_i256 = I256::from_dec_str(&weth_balance_before.to_string())?;
-        let weth_balance_after_i256 = I256::from_dec_str(&weth_balance_after.to_string())?;
+        let usdt = H160::from_str(USDT).unwrap();
+        let usdc = H160::from_str(USDC).unwrap();
 
-        let profit = (weth_balance_after_i256 - weth_balance_before_i256).as_i128();
+        let mut weth_before_i256 = I256::zero();
+        let mut weth_after_i256 = I256::zero();
+
+        for (main_currency, _) in &starting_mc_values {
+            let mc_balance_before = *mc_balances_before.get(&main_currency).unwrap();
+            let mc_balance_after = *mc_balances_after.get(&main_currency).unwrap();
+
+            let (mc_balance_before, mc_balance_after) = if *main_currency == usdt {
+                let before =
+                    convert_usdt_to_weth(&mut simulator, mc_balance_before).unwrap_or_default();
+                let after =
+                    convert_usdt_to_weth(&mut simulator, mc_balance_after).unwrap_or_default();
+                (before, after)
+            } else if *main_currency == usdc {
+                let before =
+                    convert_usdc_to_weth(&mut simulator, mc_balance_before).unwrap_or_default();
+                let after =
+                    convert_usdc_to_weth(&mut simulator, mc_balance_after).unwrap_or_default();
+                (before, after)
+            } else {
+                (mc_balance_before, mc_balance_after)
+            };
+
+            let mc_balance_before_i256 = I256::from_dec_str(&mc_balance_before.to_string())?;
+            let mc_balance_after_i256 = I256::from_dec_str(&mc_balance_after.to_string())?;
+
+            weth_before_i256 += mc_balance_before_i256;
+            weth_after_i256 += mc_balance_after_i256;
+        }
+
+        let profit = (weth_after_i256 - weth_before_i256).as_i128();
         let gas_cost = eth_used_as_gas_i256.as_i128();
         let revenue = profit - gas_cost;
 
