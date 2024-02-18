@@ -5,8 +5,7 @@ use ethers::types::{transaction::eip2930::AccessList, H160, H256, U256, U64};
 use foundry_evm_mini::evm::executor::fork::{BlockchainDb, BlockchainDbMeta, SharedBackend};
 use foundry_evm_mini::evm::executor::inspector::{get_precompiles_for, AccessListTracer};
 use revm::primitives::bytes::Bytes as rBytes;
-use revm::primitives::Bytes;
-use revm::primitives::Log;
+use revm::primitives::{Bytes, Log, B160};
 use revm::{
     db::{CacheDB, Database},
     primitives::{
@@ -323,5 +322,34 @@ impl<M: Middleware + 'static> EvmSimulator<M> {
         })?;
         let out: (U256, U256, U256) = self.abi.pair.decode_output("getReserves", value.output)?;
         Ok((out.0, out.1))
+    }
+
+    pub fn get_balance_slot(&mut self, token_address: H160) -> Result<i32> {
+        let calldata = self.abi.token.encode("balanceOf", token_address)?;
+        self.evm.env.tx.caller = self.owner.into();
+        self.evm.env.tx.transact_to = TransactTo::Call(token_address.into());
+        self.evm.env.tx.data = calldata.0;
+        let result = match self.evm.transact_ref() {
+            Ok(result) => result,
+            Err(e) => return Err(anyhow!("EVM ref call failed: {e:?}")),
+        };
+        let token_b160: B160 = token_address.into();
+        let token_acc = result.state.get(&token_b160).unwrap();
+        let token_touched_storage = token_acc.storage.clone();
+        for i in 0..30 {
+            let slot = keccak256(&abi::encode(&[
+                abi::Token::Address(token_address.into()),
+                abi::Token::Uint(U256::from(i)),
+            ]));
+            let slot: rU256 = U256::from(slot).into();
+            match token_touched_storage.get(&slot) {
+                Some(_) => {
+                    return Ok(i);
+                }
+                None => {}
+            }
+        }
+
+        Ok(-1)
     }
 }

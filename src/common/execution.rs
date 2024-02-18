@@ -72,6 +72,7 @@ impl Executor {
             owner.clone(),
         );
 
+        // The endpoints here will gracefully fail if it doesn't work
         let mut builder_urls = HashMap::new();
         builder_urls.insert(
             "flashbots".to_string(),
@@ -110,7 +111,6 @@ impl Executor {
             "gambit".to_string(),
             Url::parse("https://builder.gmbit.co/rpc").unwrap(),
         );
-        // Will gracefully fail if the endpoint isn't live yet
         builder_urls.insert(
             "idcmev".to_string(),
             Url::parse("https://rpc.idcmev.xyz").unwrap(),
