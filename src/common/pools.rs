@@ -10,7 +10,13 @@ use indicatif::{ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use log::info;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fs::OpenOptions, path::Path, str::FromStr, sync::Arc};
+use std::{
+    collections::HashMap,
+    fs::{create_dir_all, OpenOptions},
+    path::Path,
+    str::FromStr,
+    sync::Arc,
+};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum DexVariant {
@@ -108,6 +114,8 @@ pub async fn load_all_pools(
     chunk: u64,
 ) -> Result<(Vec<Pool>, i64)> {
     let cache_file = "cache/.cached-pools.csv";
+    create_dir_all(cache_file)?;
+
     let file_path = Path::new(cache_file);
     let file_exists = file_path.exists();
     let file = OpenOptions::new()
