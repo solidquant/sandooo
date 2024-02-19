@@ -113,9 +113,10 @@ pub async fn load_all_pools(
     from_block: u64,
     chunk: u64,
 ) -> Result<(Vec<Pool>, i64)> {
+    match create_dir_all("cache") {
+        _ => {}
+    }
     let cache_file = "cache/.cached-pools.csv";
-    create_dir_all(cache_file)?;
-
     let file_path = Path::new(cache_file);
     let file_exists = file_path.exists();
     let file = OpenOptions::new()
